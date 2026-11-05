@@ -60,6 +60,7 @@ struct GestureOverlay: UIViewRepresentable {
     func makeUIView(context: Context) -> GestureOverlayUIView {
         let engine = GestureEngine()
         engine.isGameplay = { Bridge.inGameplay }
+        engine.edgeBackEnabled = true
         engine.onPulse = { Bridge.pulse($0) }
         engine.onHold = { Bridge.hold($0, $1) }
         engine.onHaptic = { HapticsManager.shared.gestureCue($0) }

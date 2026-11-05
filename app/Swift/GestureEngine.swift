@@ -18,6 +18,8 @@ final class GestureEngine {
         var flickMinPt: CGFloat = 36
         var swipeUpPt: CGFloat = 30
         var menuStepPt: CGFloat = 40
+        var edgeBackStartPt: CGFloat = 24   // touch-down zone at the left edge
+        var edgeBackTravelPt: CGFloat = 56  // rightward travel that commits Back
         var relockRatio: CGFloat = 1.5
         var sensitivity: CGFloat = 1.0
     }
@@ -29,6 +31,10 @@ final class GestureEngine {
     var config = Config()
     var isGameplay: () -> Bool = { false }
     var viewWidth: CGFloat = 390
+    /// iOS-style "swipe in from the left edge = Back" in menu context. Starts
+    /// only at the screen edge, so it can't collide with the mid-screen
+    /// horizontal scrubs that step option values. Off on visionOS (no edge).
+    var edgeBackEnabled = false
 
     var onPulse: (ApotrisAction) -> Void = { _ in }
     var onHold: (ApotrisAction, Bool) -> Void = { _, _ in }
@@ -43,6 +49,7 @@ final class GestureEngine {
         case verticalDown
         case softHold
         case menuScrub(axisIsX: Bool)
+        case edgeBack         // menu edge swipe in progress, not yet committed
         case consumed         // terminal (hard drop, hold, zone, chord…)
     }
 
@@ -58,6 +65,7 @@ final class GestureEngine {
     private var moveAccum: CGFloat = 0
     private var menuAccum: CGFloat = 0
     private var gameplayGesture = false
+    private var edgeStart = false
     private var primaryHand = 0
     private var flick = FlickClassifier()
     private var longPressTimer: DispatchWorkItem?
@@ -81,6 +89,8 @@ final class GestureEngine {
             moveAccum = 0
             menuAccum = 0
             gameplayGesture = isGameplay()
+            edgeStart = edgeBackEnabled && !gameplayGesture
+                && p.x <= config.edgeBackStartPt
             scheduleLongPress()
         } else if chordCandidate == nil,
                   case .pending = phase,
@@ -139,6 +149,10 @@ final class GestureEngine {
                     phase = .verticalDown
                     beginFlick(time: time, y: p.y)
                 }
+            } else if edgeStart && dxTotal > 0 && abs(dxTotal) >= abs(dyTotal) {
+                // Rightward drag off the left edge: Back, not a Right step.
+                phase = .edgeBack
+                commitEdgeBackIfReady(dxTotal)
             } else {
                 phase = .menuScrub(axisIsX: abs(dxTotal) > abs(dyTotal))
                 menuAccum = 0
@@ -176,6 +190,9 @@ final class GestureEngine {
 
         case .menuScrub(let axisIsX):
             accumulateMenu(axisIsX: axisIsX, delta: axisIsX ? stepDx : stepDy)
+
+        case .edgeBack:
+            commitEdgeBackIfReady(dxTotal)
 
         case .idle, .consumed:
             break
@@ -269,6 +286,14 @@ final class GestureEngine {
     private func resetPrimary() {
         primary = nil
         phase = .idle
+        edgeStart = false
+    }
+
+    private func commitEdgeBackIfReady(_ dxTotal: CGFloat) {
+        guard dxTotal >= config.edgeBackTravelPt else { return }
+        phase = .consumed
+        onPulse(ApotrisActionCancel)
+        onHaptic(.chord)
     }
 
     private func cellSize() -> CGFloat {

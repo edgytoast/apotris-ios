@@ -174,6 +174,7 @@ struct SettingsSheet: View {
                     Group {
                         LabeledContent("Tap", value: "Confirm")
                         LabeledContent("Two-finger tap", value: "Back")
+                        LabeledContent("Swipe in from left edge", value: "Back")
                         LabeledContent("Swipe", value: "Navigate")
                     }
                     .font(.footnote)

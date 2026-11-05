@@ -18,6 +18,11 @@ struct MetalHostView: UIViewRepresentable {
 struct GameScreen: View {
     @EnvironmentObject var settings: PortSettings
     @State private var showSettings = false
+    // The pause chip only means something inside a game scene; in menus and the
+    // attract demo Start is a no-op, so hide it there. Polled like GameInfoBar.
+    @State private var inGameScene = false
+    private let chipTick = Timer.publish(every: 1.0 / 10.0, on: .main, in: .common)
+        .autoconnect()
 
     var body: some View {
         ZStack {
@@ -45,10 +50,12 @@ struct GameScreen: View {
                 HStack {
                     Spacer()
                     if settings.showChips {
-                        HUDChip(systemName: "pause.fill") {
-                            Bridge.pulse(ApotrisActionPause)
+                        if inGameScene {
+                            HUDChip(systemName: "pause.fill") {
+                                Bridge.pulse(ApotrisActionPause)
+                            }
+                            .accessibilityIdentifier("chipPause")
                         }
-                        .accessibilityIdentifier("chipPause")
                         HUDChip(systemName: "gearshape.fill") {
                             showSettings = true
                         }
@@ -77,6 +84,7 @@ struct GameScreen: View {
         // gaze-clicks the chrome. (visionOS 2.0+; per Fable consult 2026-07-19.)
         .handlesGameControllerEvents(matching: .gamepad)
         #endif
+        .onReceive(chipTick) { _ in inGameScene = apotris_in_game_scene() }
         .sheet(isPresented: $showSettings) {
             SettingsSheet()
                 .environmentObject(settings)

@@ -5,8 +5,26 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IOS_UDID=$(grep 'apotris-ios-dev' docs/sim.md | grep -oE '[A-F0-9-]{36}')
-VISION_UDID=$(grep 'apotris-vision-dev' docs/sim.md | grep -oE '[A-F0-9-]{36}')
+# Device UDIDs: pass them in (your lane's devices; NEVER create simulators --
+# see ~/dev/CLAUDE.md), e.g.
+#   IOS_UDID=<iPhone 17 Pro Max udid> VISION_UDID=<Apple Vision Pro udid> \
+#     scripts/sim-verify.sh
+# or as two positional args. Falls back to docs/sim.md (gitignored, local).
+IOS_UDID="${1:-${IOS_UDID:-}}"
+VISION_UDID="${2:-${VISION_UDID:-}}"
+if [ -z "$IOS_UDID" ] && [ -f docs/sim.md ]; then
+  IOS_UDID=$(grep 'apotris-ios-dev' docs/sim.md | grep -oE '[A-F0-9-]{36}' || true)
+fi
+if [ -z "$VISION_UDID" ] && [ -f docs/sim.md ]; then
+  VISION_UDID=$(grep 'apotris-vision-dev' docs/sim.md | grep -oE '[A-F0-9-]{36}' || true)
+fi
+[ -n "$IOS_UDID" ] && [ -n "$VISION_UDID" ] || {
+  echo "error: need IOS_UDID and VISION_UDID (env or args); see xcrun simctl list devices available" >&2
+  exit 1
+}
+# Shut down what we booted, even on failure (program rule: never leave a
+# simulator running).
+trap 'xcrun simctl shutdown "$IOS_UDID" 2>/dev/null || true; xcrun simctl shutdown "$VISION_UDID" 2>/dev/null || true' EXIT
 SHOTS=docs/screenshots
 
 scripts/build-ios-core.sh ios-sim

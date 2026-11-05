@@ -1004,6 +1004,10 @@ bool apotris_in_gameplay(void) {
            !paused && !demo;
 }
 
+bool apotris_in_game_scene(void) {
+    return scene != nullptr && dynamic_cast<GameScene*>(scene) != nullptr && !demo;
+}
+
 uint32_t apotris_frame_counter(void) { return (uint32_t)frameCounter; }
 
 const char* apotris_debug_state(void) {

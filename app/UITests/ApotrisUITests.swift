@@ -83,13 +83,50 @@ final class ApotrisUITests: XCTestCase {
     }
 
     private func screenshotArtifact(_ app: XCUIApplication, _ name: String) {
-        let shot = XCTAttachment(screenshot: app.screenshot())
+        let image = app.screenshot()
+        let shot = XCTAttachment(screenshot: image)
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+        // Optional on-disk copy (TEST_RUNNER_APOTRIS_SHOT_DIR=… xcodebuild test)
+        // so a verification round can look at the frames without xcresulttool.
+        if let dir = ProcessInfo.processInfo.environment["APOTRIS_SHOT_DIR"] {
+            try? image.pngRepresentation.write(
+                to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+        }
     }
 
     // MARK: - Tests
+
+    /// Menu Back gestures: an edge swipe in from the left backs out of a
+    /// submenu; a mid-screen horizontal swipe must NOT (it steps values).
+    /// Asserted by eye from the saved frames — the HUD carries no scene name.
+    func testEdgeSwipeBack() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-controlScheme", "gestures",
+                                "-hapticsEnabled", "NO", "-gameVolume", "0"]
+        app.launchEnvironment["APOTRIS_TEST_MENU"] = "1"
+        app.launch()
+        settle(6)
+        screenshotArtifact(app, "back-0-main-menu")
+
+        center(app, 0.5, 0.3).tap()            // Confirm on "Play"
+        settle(1.5)
+        screenshotArtifact(app, "back-1-submenu")
+
+        // Mid-screen rightward swipe: navigation, must stay in the submenu.
+        center(app, 0.3, 0.3).press(forDuration: 0.02,
+                                    thenDragTo: center(app, 0.7, 0.3))
+        settle(1.0)
+        screenshotArtifact(app, "back-2-after-mid-swipe")
+
+        // Edge swipe in from the left: Back.
+        center(app, 0.01, 0.3).press(forDuration: 0.02,
+                                     thenDragTo: center(app, 0.5, 0.3))
+        settle(1.5)
+        screenshotArtifact(app, "back-3-after-edge-swipe")
+
+    }
 
     func testMenuTapsReachGameplay() {
         let app = launchApp()

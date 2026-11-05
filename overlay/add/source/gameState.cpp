@@ -7,7 +7,7 @@
 // and it is impossible to add it to the writer but forget the reader.
 //
 // Access to Game's private handling/RNG state comes from the one-line
-// `friend struct GameStateIO;` added by overlay patch 0014 — without it a
+// `friend struct GameStateIO;` added by overlay patch 0015 — without it a
 // resumed game would keep its board but lose DAS charge, lock delay, the
 // active bag, grade progress and the piece-drought counters.
 
@@ -36,7 +36,7 @@ using BlockEngine::Timestamp;
 namespace {
 
 constexpr char kMagic[8] = {'A', 'P', 'O', 'S', 'A', 'V', 'E', '1'};
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2; // 2: v4.2.0 Tuning::sonicDrop
 
 // Nothing in Game legitimately grows past this; a larger count means a corrupt
 // blob, and we refuse it rather than trying to allocate it.
@@ -237,6 +237,7 @@ template <class Ar> void visit(Ar& ar, BlockEngine::Tuning& t) {
     ar.raw(t.ihs);
     ar.raw(t.irs);
     ar.raw(t.initialType);
+    ar.raw(t.sonicDrop); // v4.2.0 (kVersion 2)
 }
 
 template <class Ar> void visitOptions(Ar& ar, Options& o) {
@@ -258,7 +259,7 @@ template <class Ar> void visitOptions(Ar& ar, Options& o) {
 
 namespace BlockEngine {
 
-// Befriended by patch 0014 so the private handling state is reachable.
+// Befriended by patch 0015 so the private handling state is reachable.
 struct GameStateIO {
     template <class Ar> static void visitGame(Ar& ar, Game& g) {
         // --- private: handling, timing and RNG bookkeeping ---
@@ -335,7 +336,8 @@ struct GameStateIO {
         ar.raw(g.gameMode);
         // g.sounds is intentionally not carried: the flags are per-frame sound
         // triggers, and replaying them on resume would fire a stale clear/
-        // levelup sting. A fresh Game zeroes them.
+        // levelup sting. A fresh Game zeroes them. (v4.2.0's attackApplied/
+        // attackReceived are the same kind of per-frame trigger.)
         visit(ar, g.previousClear);
         ar.raw(g.timer);
         // g.refresh is intentionally not carried, for the same reason as
@@ -436,10 +438,12 @@ struct GameStateIO {
 // would quietly drop it — so make the build fail instead and force whoever
 // re-pins upstream to extend visitGame(). If this fires: add the new field(s)
 // to visitGame in declaration order, bump kVersion, then update this number.
-static_assert(sizeof(Game) == 4176,
+// 4184 since v4.2.0: SoundFlags gained attackApplied/attackReceived (not
+// carried, like the rest of g.sounds); Tuning gained sonicDrop (carried).
+static_assert(sizeof(Game) == 4184,
               "BlockEngine::Game changed size — review gameState.cpp's "
               "visitGame() for fields added or removed upstream, then update "
-              "this assertion (see overlay patch 0014).");
+              "this assertion (see overlay patch 0015).");
 
 namespace GameState {
 

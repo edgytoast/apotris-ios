@@ -1,6 +1,6 @@
 --- a/source/menus.cpp
 +++ b/source/menus.cpp
-@@ -809,6 +809,15 @@
+@@ -880,6 +880,15 @@
  
              // Hold-to-confirm processing for Restart/Quit
              if (confirmHoldAction >= 0) {
@@ -16,34 +16,17 @@
                  if (key_is_down(k.confirm)) {
                      confirmHoldTimer++;
  
-@@ -838,38 +847,41 @@
+@@ -908,21 +917,24 @@
                      }
  
                      // Action completes after 1 second (60 frames)
 -                    if (confirmHoldTimer >= 60) {
 -                        sprite_hide(confirmMeterSprite);
 -                        if (confirmHoldAction == 1) {
--                            addGameStats();
--                            startGame();
--                            changeScene([]() { return new GameScene(); });
--                            paused = false;
--                            count = false;
--                            sfx(SFX_MENUCONFIRM);
+-                            restartGame();
 -                            return 0;
 -                        } else if (confirmHoldAction == 3) {
--                            enableBlend(prevBld);
--                            sfx(SFX_MENUCANCEL);
--                            buildBG(3, 0, 27, 0, 1, true);
--                            addGameStats();
--                            playSongRandom(0);
--
--#ifdef MULTIBOOT
--                            changeScene([]() { return new MultBattleScene(); },
--                                        Transitions::FADE);
--#else
--                            changeScene([]() { return new MainMenuScene(); },
--                                        Transitions::FADE);
--#endif
+-                            quitGame();
 -                            return 1;
 -                        }
 -                    }
@@ -59,27 +42,10 @@
 +                if (confirmDone) {
 +                    sprite_hide(confirmMeterSprite);
 +                    if (confirmHoldAction == 1) {
-+                        addGameStats();
-+                        startGame();
-+                        changeScene([]() { return new GameScene(); });
-+                        paused = false;
-+                        count = false;
-+                        sfx(SFX_MENUCONFIRM);
++                        restartGame();
 +                        return 0;
 +                    } else if (confirmHoldAction == 3) {
-+                        enableBlend(prevBld);
-+                        sfx(SFX_MENUCANCEL);
-+                        buildBG(3, 0, 27, 0, 1, true);
-+                        addGameStats();
-+                        playSongRandom(0);
-+
-+#ifdef MULTIBOOT
-+                        changeScene([]() { return new MultBattleScene(); },
-+                                    Transitions::FADE);
-+#else
-+                        changeScene([]() { return new MainMenuScene(); },
-+                                    Transitions::FADE);
-+#endif
++                        quitGame();
 +                        return 1;
 +                    }
                  }

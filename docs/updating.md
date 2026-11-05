@@ -16,9 +16,11 @@ git -C vendor/apotris fetch origin
 git -C vendor/apotris log --oneline HEAD..origin/main
 
 # 2. Re-pin to the new commit
-git -C vendor/apotris checkout <new-commit>
+git -C vendor/apotris checkout '<tag>^{commit}'   # tags are annotated: pin the commit
 git -C vendor/apotris rev-parse HEAD > upstream.pin
-git -C vendor/apotris submodule update --init   # in case subprojects moved
+# in case subprojects moved (only the ones the Apple build uses):
+git -C vendor/apotris submodule update --init --recursive \
+    subprojects/Tilengine subprojects/libdatachannel subprojects/libjuice
 
 # 3. Regenerate the overlay patches against the new source.
 #    Exits non-zero with the offending patch if upstream changed a patched
@@ -26,11 +28,16 @@ git -C vendor/apotris submodule update --init   # in case subprojects moved
 python3 scripts/gen-patches.py
 
 # 4. Compose the work tree + rebuild + verify in the simulator
+# If submodules moved, delete their stale copies under work/apotris/subprojects/
+# and the build-core-* dirs first: apply-overlay.sh protects work/subprojects
+# from rsync --delete, so removed upstream files would otherwise linger.
 scripts/apply-overlay.sh
 scripts/build-ios-core.sh ios-sim
 (cd app && xcodegen generate && xcodebuild -scheme Apotris \
-   -destination 'platform=iOS Simulator,name=iPhone 17' build)
-scripts/sim-verify.sh          # unit + UI tests, screenshot artifacts
+   -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max,OS=27.0' build)
+# unit + UI tests, screenshot artifacts -- pass YOUR lane's device UDIDs
+# (never create simulators; see ~/dev/CLAUDE.md):
+IOS_UDID=<iphone udid> VISION_UDID=<vision pro udid> scripts/sim-verify.sh
 
 # 5. Ship it
 scripts/build-ios-core.sh ios && scripts/build-ios-core.sh xros
@@ -40,25 +47,42 @@ scripts/release.sh             # clean public commit + push to GitHub
 
 ## What usually happens
 
-Most upstream changes are in game logic / assets and never touch our 13
+Most upstream changes are in game logic / assets and never touch our
 patched regions, so steps 3–4 are a clean no-op re-pin and it "just works".
 When a patch *does* need attention, `gen-patches.py` names the exact edit and
 the mismatch, so re-deriving it is a targeted fix (see the patch's `gen(...)`
 block in `scripts/gen-patches.py`).
 
-The 13 patches, for reference:
+The patches, for reference (v4.2.0 pin):
 `0001` meson apple-mobile target · `0002` platform.hpp IOS include ·
-`0003` NO_ONLINE guards · `0004` `apotris_main` entry + iOS test hook + iOS
-exception routing · `0005` audio stdio I/O · `0006` SoLoud CoreAudio backend ·
-`0007` Tilengine no-OpenSSL · `0008` IOS default binds · `0009` native-HUD gate ·
-`0010` libdatachannel over mbedTLS (Apple mobile) · `0011` iOS online CA cert ·
-`0012` iOS signaling connect-failure handling · `0013` pause-menu Restart/Quit
-tap-to-confirm on iOS.
+`0003` NO_ONLINE guards · `0004` `apotris_main` entry + iOS dev test hooks
+(`APOTRIS_TEST_ROOM`/`SEED`/`SOLO`/`MENU`) · `0005` audio stdio I/O ·
+`0006` SoLoud CoreAudio backend · `0007` Tilengine no-OpenSSL · `0008` IOS
+default binds · `0009` native-HUD gate · `0010` libdatachannel over mbedTLS
+(Apple mobile) · `0011` iOS online CA cert · ~~`0012`~~ (dropped, see below) ·
+`0013` pause-menu Restart/Quit tap-to-confirm on iOS · `0014`–`0017`
+single-slot suspend-save (meson source, `friend` in Game, "Continue" menu
+entry + dispatch).
 
-The last three (`0010`–`0012`) are the online-multiplayer stack: they cross-build
-libdatachannel/libjuice/usrsctp against mbedTLS, point the WebSocket at the
-bundled CA cert, and make a failed signaling connect fall back to the game's
-reconnect loop instead of crashing or hanging the game thread.
+`0010`/`0011` are the online-multiplayer stack: they cross-build
+libdatachannel/libjuice/usrsctp against mbedTLS (TURN relay support from
+upstream v4.2.0 builds in with it) and point the WebSocket at the bundled CA
+cert.
+
+`0012` (signaling connect-failure handling) was dropped at the v4.2.0 re-pin:
+upstream ac19ab2 made the connect asynchronous (callbacks post to a mailbox
+drained on the game thread, 20 s signaling deadline, failures go through
+`connectionFailed()` to the MultiplayerExceptionScene), which fixes the abort
+and hang it patched. Its `gen(12, ...)` rule is now assertion-only: it writes
+no patch but fails loudly if upstream reintroduces a blocking wait. Likewise
+`0004` no longer patches exception routing — upstream presents exceptions on
+every TE build, which includes iOS.
+
+Two drift tripwires besides the match counts: `static_assert(sizeof(Game) ==
+N)` in `overlay/add/source/gameState.cpp` fires on any upstream field change
+(review `visitGame()`, bump `kVersion` if the format changes, take N from
+clang's "evaluates to" note), and `include/blockEngine.hpp` is CRLF (gen()
+handles it; check line endings first if a patch rejects).
 
 ## Cadence
 

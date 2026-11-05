@@ -34,11 +34,22 @@ def gen(num: int, name: str, relpath: str, transforms):
         assert found == count, (
             f"{name}: expected {count}x, found {found}x: {old[:70]!r}"
         )
-        out = out.replace(old, new)
+        if new is not None:  # None = assert-only (pin an upstream shape)
+            out = out.replace(old, new)
 
     if crlf:
         src = src.replace("\n", "\r\n")
         out = out.replace("\n", "\r\n")
+
+    path = PATCHES / f"{num:04d}-{name}.patch"
+    if out == src:
+        # Assertion-only rule: upstream now does what the patch used to, and
+        # the asserts above pin the upstream shape we rely on. No patch file
+        # (an empty one would make `patch` fail in apply-overlay.sh).
+        if path.exists():
+            path.unlink()
+        print(f"checked {name}: upstream shape asserted, no patch needed")
+        return
 
     diff = difflib.unified_diff(
         src.splitlines(keepends=True),
@@ -46,7 +57,6 @@ def gen(num: int, name: str, relpath: str, transforms):
         fromfile=f"a/{relpath}",
         tofile=f"b/{relpath}",
     )
-    path = PATCHES / f"{num:04d}-{name}.patch"
     path.write_text("".join(diff), newline="")
     print(f"wrote {path.relative_to(ROOT)}{' (CRLF)' if crlf else ''}")
 
@@ -215,15 +225,17 @@ gen(3, "no-online-guards", "include/LinkWebRTC.hpp", [
 
 gen(4, "main-entry-ios", "source/main.cpp", [
     (
+        # v4.2.0 added `--scenario` argv parsing (#ifdef PC) ahead of
+        # platformInit(), so anchor on the signature + its first new line.
         "int main(int argc, char* argv[]) {\n"
-        "    platformInit();\n",
+        "    std::string scenarioPath;\n",
         "#ifdef IOS\n"
         "// The app shell owns main() (SwiftUI); the game loop runs on its own thread.\n"
         "int apotris_main(int argc, char* argv[]) {\n"
         "#else\n"
         "int main(int argc, char* argv[]) {\n"
         "#endif\n"
-        "    platformInit();\n",
+        "    std::string scenarioPath;\n",
         1,
     ),
     (
@@ -275,17 +287,16 @@ gen(4, "main-entry-ios", "source/main.cpp", [
         "#else\n",
         1,
     ),
-    # Route multiplayer exceptions (e.g. a failed signaling connect) to the
-    # MultiplayerExceptionScene on iOS too, not just PC. setUpPresentException
-    # is defined in liba_pc.cpp, which the iOS core compiles. Without this the
-    # main loop would clear exceptionReason and silently strand the player in a
-    # dead MultBattleScene; with the LinkWebRTC catch (patch 12) it means a
-    # dropped connection shows an error and returns to the menu instead of
-    # aborting the app.
+    # Exception routing (multiplayer exception -> MultiplayerExceptionScene)
+    # used to be patched here from `#ifdef PC` to `PC || IOS`. Upstream v4.2.0
+    # made it `#if defined(TE) || defined(N3DS)`; the iOS core is a TE build
+    # (meson adds -DTE for every Tilengine target), so it is covered upstream
+    # and the edit was dropped. Assert the upstream shape so a future change
+    # there fails loudly instead of silently stranding players in a dead room.
     (
-        "#ifdef PC\n"
+        "#if defined(TE) || defined(N3DS)\n"
         "            setUpPresentException(localReason);\n",
-        "#if defined(PC) || defined(IOS)\n"
+        "#if defined(TE) || defined(N3DS)\n"
         "            setUpPresentException(localReason);\n",
         1,
     ),
@@ -420,111 +431,55 @@ gen(11, "ios-online-cacert", "include/LinkWebRTC.hpp", [
 ])
 
 gen(12, "ios-online-connect-failure", "include/LinkWebRTC.hpp", [
-    # The desktop/iOS signaling path blocks on wsFuture until the WebSocket to
-    # api.apotris.com opens or fails. activate() runs inside the game loop
-    # (scene->update), so a failed connect must not abort or hang it:
-    #   - an uncaught throw from get() aborts the whole app (real crash seen on
-    #     a TCP timeout: onError -> set_exception -> get() rethrows);
-    #   - a failure that only fires onClosed (e.g. a TLS/handshake error) never
-    #     settled the promise at all, so get() blocked the game thread forever
-    #     on "Waiting for connection...".
-    # Fix: settle one shared, guarded promise from whichever callback fires
-    # first, and wait with a timeout so get() can't block the game thread
-    # forever. On timeout/failure just return, leaving the link "active but not
-    # connected": the MultiplayerLink state machine then sits in
-    # ConnectionInitializing showing "Waiting for connection..." -- responsive
-    # (cancel returns to the menu, and a slow connect that completes after the
-    # timeout is still picked up), instead of crashing, freezing, or (if we had
-    # cleared `active`) spinning the Deactivated<->Activated reconnect loop every
-    # frame and hammering the signaling server. shared_ptr capture keeps the
-    # promise alive for a callback that fires after activate() returns (e.g. a
-    # later session close).
-    # (<atomic>/<chrono> come in transitively via rtc/rtc.hpp; <chrono> is also
-    # already used in randomId(). Adding them here would collide with patch 3's
-    # edit to the include guard, so we rely on the transitive include.)
+    # DROPPED at the v4.2.0 re-pin (assertion-only now, no patch file).
+    #
+    # Up to v4.1.0 the desktop/iOS signaling path blocked the game thread on
+    # wsFuture.get(): an onError set_exception made get() rethrow uncaught
+    # (app abort on a TCP timeout), and a failure that only fired onClosed
+    # (TLS/handshake error) never settled the promise, hanging the game thread
+    # on "Waiting for connection..." forever. Our patch settled a guarded
+    # promise from the first of onOpen/onError/onClosed, waited 15 s, and left
+    # the link active-but-disconnected.
+    #
+    # Upstream ac19ab2 ("hardened multiplayer connection lifecycle and
+    # delivery") replaced that with a fully asynchronous connect: activate()
+    # never blocks; every WebSocket callback posts to an epoch-tagged mailbox
+    # (multiplayerTransport::SessionEvents) that sync() drains on the game
+    # thread inside a try/catch; onError/onClosed and a 20 s signalingDeadline
+    # all route to connectionFailed(), which deactivates once (guarded by
+    # `active`, so no Deactivated<->Activated spin) and sets exceptionReason,
+    # which main.cpp now presents via MultiplayerExceptionScene on every TE
+    # build (iOS included; see patch 4). Both failure modes are therefore
+    # fixed upstream, and the user gets an error screen + back-to-menu instead
+    # of an indefinite "Waiting for connection...".
+    #
+    # The asserts below pin exactly that upstream shape; if a future release
+    # reintroduces a blocking wait or drops the deadline, this fails loudly.
     (
-        "        std::promise<void> wsPromise;\n"
-        "        auto wsFuture = wsPromise.get_future();\n"
-        "\n"
-        "        ws->onOpen([this, wws = make_weak_ptr(ws), &wsPromise]() {\n"
-        "            std::cout << \"WebSocket connected, signaling ready\" << std::endl;\n"
-        "            wsPromise.set_value();\n"
-        "            if (auto shared_ws = wws.lock()) {\n"
-        "                json playerInfo = {{ID, \"broadcast\"},\n"
-        "                                   {TYPE, PLAYER_INFO},\n"
-        "                                   {NAME, localPlayerName}};\n"
-        "                shared_ws->send(playerInfo.dump());\n"
-        "                std::cout << \"Sent player info to signaling server: \"\n"
-        "                          << playerInfo.dump() << std::endl;\n"
-        "            }\n"
-        "        });\n"
-        "\n"
-        "        ws->onError([&wsPromise](const std::string& s) {\n"
-        "            std::cout << \"WebSocket error\" << std::endl;\n"
-        "            wsPromise.set_exception(\n"
-        "                std::make_exception_ptr(std::runtime_error(s)));\n"
-        "        });\n",
-        "        auto wsPromise = std::make_shared<std::promise<void>>();\n"
-        "        auto wsSettled = std::make_shared<std::atomic<bool>>(false);\n"
-        "        auto wsFuture = wsPromise->get_future();\n"
-        "        auto settle = [wsPromise, wsSettled](std::exception_ptr err) {\n"
-        "            bool expected = false;\n"
-        "            if (!wsSettled->compare_exchange_strong(expected, true))\n"
-        "                return;\n"
-        "            if (err)\n"
-        "                wsPromise->set_exception(err);\n"
-        "            else\n"
-        "                wsPromise->set_value();\n"
-        "        };\n"
-        "\n"
-        "        ws->onOpen([this, wws = make_weak_ptr(ws), settle]() {\n"
-        "            std::cout << \"WebSocket connected, signaling ready\" << std::endl;\n"
-        "            settle(nullptr);\n"
-        "            if (auto shared_ws = wws.lock()) {\n"
-        "                json playerInfo = {{ID, \"broadcast\"},\n"
-        "                                   {TYPE, PLAYER_INFO},\n"
-        "                                   {NAME, localPlayerName}};\n"
-        "                shared_ws->send(playerInfo.dump());\n"
-        "                std::cout << \"Sent player info to signaling server: \"\n"
-        "                          << playerInfo.dump() << std::endl;\n"
-        "            }\n"
-        "        });\n"
-        "\n"
-        "        ws->onError([settle](const std::string& s) {\n"
-        "            std::cout << \"WebSocket error: \" << s << std::endl;\n"
-        "            settle(std::make_exception_ptr(std::runtime_error(s)));\n"
-        "        });\n"
-        "\n"
-        "        ws->onClosed([settle]() {\n"
-        "            std::cout << \"WebSocket closed\" << std::endl;\n"
-        "            settle(std::make_exception_ptr(\n"
-        "                std::runtime_error(\"closed before signaling ready\")));\n"
-        "        });\n",
+        "            ws->onError(\n"
+        "                [mailbox = events, epoch = session](const std::string& error) {\n"
+        "                    mailbox->post(epoch, [error](LinkUniversal& self) {\n"
+        "                        self.connectionFailed(std::string(\"Signaling error: \") +\n"
+        "                                              error);\n",
+        None,
         1,
     ),
     (
-        "#if !defined(WEB) && !defined(ANDROID)\n"
-        "        std::cout << \"Waiting for signaling to be connected...\" << std::endl;\n"
-        "        wsFuture.get();\n"
-        "#endif\n",
-        "#if !defined(WEB) && !defined(ANDROID)\n"
-        "        std::cout << \"Waiting for signaling to be connected...\" << std::endl;\n"
-        "        if (wsFuture.wait_for(std::chrono::seconds(15)) !=\n"
-        "            std::future_status::ready) {\n"
-        "            std::cout << \"Signaling connection timed out; still waiting\"\n"
-        "                      << std::endl;\n"
-        "            return;\n"
-        "        }\n"
-        "        try {\n"
-        "            wsFuture.get();\n"
-        "        } catch (const std::exception& e) {\n"
-        "            std::cout << \"Signaling connection failed: \" << e.what()\n"
-        "                      << std::endl;\n"
-        "            return;\n"
-        "        }\n"
-        "#endif\n",
+        "        ws->onClosed([mailbox = events, epoch = session]() {\n"
+        "            mailbox->post(epoch, [](LinkUniversal& self) {\n"
+        "                self.connectionFailed(\"Signaling connection closed\");\n",
+        None,
         1,
     ),
+    (
+        "        if (active && !signalingReady &&\n"
+        "            std::chrono::steady_clock::now() >= signalingDeadline)\n"
+        "            connectionFailed(\"Signaling connection timed out\");\n",
+        None,
+        1,
+    ),
+    ("wsFuture", None, 0),
+    (".get();", None, 0),
 ])
 
 gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
@@ -532,9 +487,12 @@ gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
     # key_is_down(confirm) held for 60 frames. Every iOS input is momentary -- a
     # gamepad tap, a touch tap, a visionOS gaze-pinch -- so the hold never
     # completes and the options are effectively dead (only Resume, an instant
-    # press, works). Restructure so the completion is shared via a confirmDone
-    # flag, and on iOS confirm on a second press / cancel on a cancel press,
-    # showing the meter full as a "press to confirm" cue.
+    # press, works). Completion is factored into a confirmDone flag: on iOS it
+    # is set on the single deliberate selection; elsewhere upstream's 60-frame
+    # hold sets it. Re-anchored at v4.2.0, where upstream folded the action
+    # bodies into restartGame()/quitGame() and added a shortGame instant path
+    # (which needs no help from us). Upstream's hold block is kept verbatim
+    # under #else.
     (
         "            // Hold-to-confirm processing for Restart/Quit\n"
         "            if (confirmHoldAction >= 0) {\n"
@@ -551,12 +509,11 @@ gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
         "                    if (progress > 12)\n"
         "                        progress = 12;\n"
         "\n"
-        "                    int meterX =\n"
-        "                        (savefile->settings.aspectRatio != 0) ? 191 : 204;\n"
+        "                    int meterX = (savefile->settings.aspectRatio != 0) ? 13 : 4;\n"
         "                    sprite_set_attr(confirmMeterSprite, ShapeSquare, 2, 256 + 3,\n"
         "                                    12, 0);\n"
         "                    sprite_enable_mosaic(confirmMeterSprite);\n"
-        "                    sprite_set_pos(confirmMeterSprite, meterX, 124);\n"
+        "                    sprite_set_pos(confirmMeterSprite, meterX, 160 - 36);\n"
         "                    sprite_unhide(confirmMeterSprite, 0);\n"
         "\n"
         "                    for (int i = 0; i < 12; i++) {\n"
@@ -570,27 +527,10 @@ gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
         "                    if (confirmHoldTimer >= 60) {\n"
         "                        sprite_hide(confirmMeterSprite);\n"
         "                        if (confirmHoldAction == 1) {\n"
-        "                            addGameStats();\n"
-        "                            startGame();\n"
-        "                            changeScene([]() { return new GameScene(); });\n"
-        "                            paused = false;\n"
-        "                            count = false;\n"
-        "                            sfx(SFX_MENUCONFIRM);\n"
+        "                            restartGame();\n"
         "                            return 0;\n"
         "                        } else if (confirmHoldAction == 3) {\n"
-        "                            enableBlend(prevBld);\n"
-        "                            sfx(SFX_MENUCANCEL);\n"
-        "                            buildBG(3, 0, 27, 0, 1, true);\n"
-        "                            addGameStats();\n"
-        "                            playSongRandom(0);\n"
-        "\n"
-        "#ifdef MULTIBOOT\n"
-        "                            changeScene([]() { return new MultBattleScene(); },\n"
-        "                                        Transitions::FADE);\n"
-        "#else\n"
-        "                            changeScene([]() { return new MainMenuScene(); },\n"
-        "                                        Transitions::FADE);\n"
-        "#endif\n"
+        "                            quitGame();\n"
         "                            return 1;\n"
         "                        }\n"
         "                    }\n"
@@ -625,12 +565,11 @@ gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
         "                    if (progress > 12)\n"
         "                        progress = 12;\n"
         "\n"
-        "                    int meterX =\n"
-        "                        (savefile->settings.aspectRatio != 0) ? 191 : 204;\n"
+        "                    int meterX = (savefile->settings.aspectRatio != 0) ? 13 : 4;\n"
         "                    sprite_set_attr(confirmMeterSprite, ShapeSquare, 2, 256 + 3,\n"
         "                                    12, 0);\n"
         "                    sprite_enable_mosaic(confirmMeterSprite);\n"
-        "                    sprite_set_pos(confirmMeterSprite, meterX, 124);\n"
+        "                    sprite_set_pos(confirmMeterSprite, meterX, 160 - 36);\n"
         "                    sprite_unhide(confirmMeterSprite, 0);\n"
         "\n"
         "                    for (int i = 0; i < 12; i++) {\n"
@@ -653,27 +592,10 @@ gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
         "                if (confirmDone) {\n"
         "                    sprite_hide(confirmMeterSprite);\n"
         "                    if (confirmHoldAction == 1) {\n"
-        "                        addGameStats();\n"
-        "                        startGame();\n"
-        "                        changeScene([]() { return new GameScene(); });\n"
-        "                        paused = false;\n"
-        "                        count = false;\n"
-        "                        sfx(SFX_MENUCONFIRM);\n"
+        "                        restartGame();\n"
         "                        return 0;\n"
         "                    } else if (confirmHoldAction == 3) {\n"
-        "                        enableBlend(prevBld);\n"
-        "                        sfx(SFX_MENUCANCEL);\n"
-        "                        buildBG(3, 0, 27, 0, 1, true);\n"
-        "                        addGameStats();\n"
-        "                        playSongRandom(0);\n"
-        "\n"
-        "#ifdef MULTIBOOT\n"
-        "                        changeScene([]() { return new MultBattleScene(); },\n"
-        "                                    Transitions::FADE);\n"
-        "#else\n"
-        "                        changeScene([]() { return new MainMenuScene(); },\n"
-        "                                    Transitions::FADE);\n"
-        "#endif\n"
+        "                        quitGame();\n"
         "                        return 1;\n"
         "                    }\n"
         "                }\n"
@@ -681,15 +603,6 @@ gen(13, "pause-menu-ios-confirm", "source/menus.cpp", [
         1,
     ),
 ])
-
-# --- 14-17: single-slot suspend-save -----------------------------------------
-# Upstream persists settings/scores but nothing about a live run, so a
-# force-quit mid-marathon loses it. The snapshot itself lives in overlay-added
-# files (source/gameState.cpp, include/gameState.hpp); these four patches are
-# only the hooks: build it, let it reach Game's private state, offer "Continue"
-# on the main menu, and dispatch it. The slot is written when the app is
-# backgrounded and cleared when it returns to the foreground (liba_ios.mm) --
-# on-disk state only matters if the process dies.
 
 gen(14, "gamestate-meson", "meson.build", [
     (

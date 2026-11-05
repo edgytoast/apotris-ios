@@ -79,7 +79,10 @@ void apotris_action_pulse(ApotrisAction action);            // 1-frame press
 void apotris_analog_event(int axis, int value); // SDL axis id, [-32768, 32767]
 
 // State ---------------------------------------------------------------------
-bool apotris_in_gameplay(void); // GameScene active and not paused
+bool apotris_in_gameplay(void);
+/// True in any real game scene (paused or READY? countdown included), false on
+/// the title/attract demo and every menu. Drives chrome like the pause chip.
+bool apotris_in_game_scene(void); // GameScene active and not paused
 uint32_t apotris_frame_counter(void);
 const char* apotris_debug_state(void); // static buffer; DEBUG HUD only
 

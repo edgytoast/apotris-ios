@@ -1,6 +1,6 @@
 --- a/source/saving.cpp
 +++ b/source/saving.cpp
-@@ -59,7 +59,7 @@
+@@ -60,7 +60,7 @@
      const int pmSave = 3876;
  
      if (savefile->newGame >= 0x50 && savefile->newGame <= 0x51) {
@@ -9,7 +9,7 @@
  
          GameKeys keys = savefile->settings.keys;
  
-@@ -269,7 +269,7 @@
+@@ -270,7 +270,7 @@
  GameKeys getDefaultGameKeys() {
      GameKeys k;
  

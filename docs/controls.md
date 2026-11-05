@@ -54,9 +54,10 @@ The one place where two intents share a gesture axis. Rules:
 |---|---|
 | Tap (anywhere) | Confirm (A) |
 | Two-finger tap | Cancel (B) |
+| Edge swipe in from the left | Cancel (B) — touch-down within `EDGE_BACK_START_PT` (24 pt) of the left edge, then ≥ `EDGE_BACK_TRAVEL_PT` (56 pt) rightward. iOS only. Fires at the threshold, emits no d-pad steps, so it never collides with mid-screen value scrubs. |
 | Swipe / drag | Discrete d-pad steps: 1 per `MENU_STEP_PT` (40 pt) of travel on the dominant axis; continuous slide walks lists |
 | Long-press | Cancel (B) alternative — also mapped, aids discoverability |
-| ⏸ chip | Start |
+| ⏸ chip | Start — shown only inside a game scene (hidden in menus and the attract demo) |
 
 Scene classification: gameplay set = {Game-family scenes}; everything else = menu. Table maintained in one shell-side function against `scene->name()` strings; unknown names default to **menu** semantics (safe: no hard drops in menus).
 

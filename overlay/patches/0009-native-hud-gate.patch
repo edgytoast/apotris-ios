@@ -1,6 +1,6 @@
 --- a/source/game.cpp
 +++ b/source/game.cpp
-@@ -1469,7 +1469,15 @@
+@@ -1476,7 +1476,15 @@
      return false;
  }
  
@@ -16,7 +16,7 @@
      if (!(game->gameMode == TRAINING || game->gameMode == ZEN || demo ||
            handlingTest)) {
  
-@@ -1520,6 +1528,10 @@
+@@ -1527,6 +1535,10 @@
  const char units[] = {'k', 'm', 'b'};
  
  void GameScene::showText() {

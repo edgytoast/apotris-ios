@@ -7,7 +7,7 @@
  
  #include "blockEngine.hpp"
  #include "cmath"
-@@ -179,7 +180,12 @@
+@@ -183,7 +184,12 @@
      checkSongs();
  }
  
@@ -17,10 +17,10 @@
 +#else
  int main(int argc, char* argv[]) {
 +#endif
-     platformInit();
- 
-     loadSave();
-@@ -188,6 +194,40 @@
+     std::string scenarioPath;
+ #ifdef PC
+     for (int i = 1; i < argc; i++) {
+@@ -212,6 +218,40 @@
      initialize();
  
  #ifndef MULTIBOOT
@@ -61,12 +61,3 @@
      changeScene([]() { return new TitleScene(); });
  #else
      changeScene([]() { return new MultBattleScene(); });
-@@ -201,7 +241,7 @@
-         if (!exceptionReason.empty()) {
-             const std::string localReason = exceptionReason;
-             exceptionReason = "";
--#ifdef PC
-+#if defined(PC) || defined(IOS)
-             setUpPresentException(localReason);
- #endif
-         } else

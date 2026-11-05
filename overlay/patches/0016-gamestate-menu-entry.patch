@@ -11,7 +11,7 @@
  extern const std::list<std::string> gameOptions;
  extern const std::list<std::string> settingsOptions;
  extern const std::list<std::string> controlOptions;
-@@ -229,6 +233,13 @@
+@@ -257,6 +261,13 @@
      std::list<std::string> getOptionList() {
          std::list<std::string> result = menuOptions;
  
